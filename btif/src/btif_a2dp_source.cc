@@ -1624,6 +1624,7 @@ bool btif_a2dp_source_end_session(const RawAddress& peer_address) {
   return true;
 }
 
+#ifdef TARGET_HAS_SPLIT_A2DP_FEATURE
 void btif_a2dp_update_sink_latency_change() {
   APPL_TRACE_EVENT("%s", __func__);
   if (btif_a2dp_source_is_hal_v2_enabled()) {
@@ -1640,6 +1641,9 @@ void btif_a2dp_update_sink_latency_change() {
     btif_a2dp_audio_send_sink_latency();
   }
 }
+#else
+void btif_a2dp_update_sink_latency_change() {}
+#endif
 
 void btif_a2dp_source_command_ack(tA2DP_CTRL_CMD cmd, tA2DP_CTRL_ACK status) {
   switch (cmd) {

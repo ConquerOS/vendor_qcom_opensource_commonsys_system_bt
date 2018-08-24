@@ -68,9 +68,13 @@
 #include "osi/include/properties.h"
 #include <base/logging.h>
 #include <utils/RefBase.h>
+
+#ifdef TARGET_HAS_SPLIT_A2DP_FEATURE
 #include <com/qualcomm/qti/bluetooth_audio/1.0/IBluetoothAudio.h>
 #include <com/qualcomm/qti/bluetooth_audio/1.0/IBluetoothAudioCallbacks.h>
 #include <com/qualcomm/qti/bluetooth_audio/1.0/types.h>
+#endif /* TARGET_HAS_SPLIT_A2DP_FEATURE */
+
 #include <hwbinder/ProcessState.h>
 #include <a2dp_vendor_aptx_adaptive_constants.h>
 #include <a2dp_vendor_ldac_constants.h>
@@ -80,6 +84,7 @@
 #include "btif_bat.h"
 #include "controller.h"
 
+#ifdef TARGET_HAS_SPLIT_A2DP_FEATURE
 using com::qualcomm::qti::bluetooth_audio::V1_0::IBluetoothAudio;
 using com::qualcomm::qti::bluetooth_audio::V1_0::IBluetoothAudioCallbacks;
 using com::qualcomm::qti::bluetooth_audio::V1_0::Status;
@@ -1603,3 +1608,16 @@ const char* dump_ctrl_event(tA2DP_CTRL_CMD_EXT cmd)
     CASE_RETURN_STR(A2DP_CTRL_GET_NUM_CONNECTED_DEVICE)
   }
 }*/
+
+#else /* TARGET_HAS_SPLIT_A2DP_FEATURE */
+
+void btif_a2dp_audio_on_started(tBTA_AV_STATUS status) {}
+void btif_a2dp_audio_on_stopped(tBTA_AV_STATUS status) {}
+void btif_a2dp_audio_on_suspended(tBTA_AV_STATUS status) {}
+void btif_a2dp_audio_interface_deinit() {}
+void btif_a2dp_audio_interface_init() {}
+tA2DP_CTRL_CMD btif_a2dp_audio_interface_get_pending_cmd() { return A2DP_CTRL_CMD_NONE; }
+void btif_a2dp_audio_reset_pending_cmds(void) {}
+//void btif_a2dp_update_sink_latency_change() {}
+
+#endif /* TARGET_HAS_SPLIT_A2DP_FEATURE */

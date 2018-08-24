@@ -4082,8 +4082,10 @@ static bt_status_t init_src(
   BTIF_TRACE_EVENT("%s() with max conn = %d", __func__, max_a2dp_connections);
   char value[PROPERTY_VALUE_MAX] = {'\0'};
 
+#ifdef TARGET_HAS_SPLIT_A2DP_FEATURE
   bt_split_a2dp_enabled = controller_get_interface()->supports_spilt_a2dp();
   BTIF_TRACE_DEBUG("split_a2dp_status = %d",bt_split_a2dp_enabled);
+#endif
   osi_property_get("persist.vendor.btstack.twsplus.defaultchannelmode",
                                     value, "mono");
   BTIF_TRACE_DEBUG("tws default channel mode = %s",value);
