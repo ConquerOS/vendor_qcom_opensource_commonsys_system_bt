@@ -98,6 +98,7 @@ std::string supported_codecs = "";
 #define BTA_AV_CO_AUDIO_HNDL_TO_INDX(hndl) (((hndl) & (~BTA_AV_CHNL_MSK)) - 1)
 #define BTA_AV_CO_AUDIO_INDX_TO_HNDL(indx) (((indx) + 1) | BTA_AV_CHNL_AUDIO)
 
+static void bta_av_co_free_peer(tBTA_AV_CO_PEER* p_peer);
 /* SCMS-T protect info */
 const uint8_t bta_av_co_cp_scmst[AVDT_CP_INFO_LEN] = {0x02, 0x02, 0x00};
 
@@ -118,13 +119,14 @@ class BtaAvCoCb {
   void reset() {
     // TODO: Ugly leftover reset from the original C code. Should go away once
     // the rest of the code in this file migrates to C++.
-    memset(peers, 0, sizeof(peers));
+    //memset(peers, 0, sizeof(peers));
     memset(codec_config, 0, sizeof(codec_config));
     memset(&cp, 0, sizeof(cp));
 
     // Initialize the handles
     for (size_t i = 0; i < BTA_AV_CO_NUM_ELEMENTS(peers); i++) {
       tBTA_AV_CO_PEER* p_peer = &peers[i];
+      bta_av_co_free_peer(p_peer);
       p_peer->handle = BTA_AV_CO_AUDIO_INDX_TO_HNDL(i);
     }
   }
@@ -152,7 +154,6 @@ static bool bta_av_co_set_codec_ota_config(tBTA_AV_CO_PEER* p_peer,
                                            bool* p_restart_output);
 static bool bta_av_co_audio_update_selectable_codec(
     A2dpCodecConfig& codec_config, const tBTA_AV_CO_PEER* p_peer);
-static void bta_av_co_free_peer(tBTA_AV_CO_PEER* p_peer);
 
 /* externs */
 extern int btif_max_av_clients;
@@ -160,6 +161,9 @@ extern tBTA_AV_HNDL btif_av_get_reconfig_dev_hndl();
 extern void btif_av_reset_codec_reconfig_flag(RawAddress address);
 extern bool bt_split_a2dp_enabled;
 extern void btif_av_set_reconfig_flag(tBTA_AV_HNDL bta_handle);
+extern bool btif_av_check_is_reconfig_pending_flag_set(RawAddress address);
+extern bool btif_av_check_is_cached_reconfig_event_exist(RawAddress address);
+
 /*******************************************************************************
  **
  ** Function         bta_av_co_cp_get_flag
@@ -610,6 +614,8 @@ tA2DP_STATUS bta_av_co_audio_getconfig(tBTA_AV_HNDL hndl, uint8_t* p_codec_info,
     if (p_peer->reconfig_needed || p_peer->rcfg_pend_getcap) {
       APPL_TRACE_DEBUG("%s: call BTA_AvReconfig(x%x)", __func__, hndl);
       btif_av_set_reconfig_flag(hndl);
+      uint8_t index = BTA_AV_CO_AUDIO_HNDL_TO_INDX(hndl);
+      btif_av_clear_remote_start_timer(index);
       BTA_AvReconfig(hndl, true, p_sink->sep_info_idx, p_peer->codec_config,
                      *p_num_protect, bta_av_co_cp_scmst);
       p_peer->rcfg_done = true;
@@ -1538,6 +1544,7 @@ bool bta_av_co_set_codec_user_config(
   tBTA_AV_HNDL hndl = btif_av_get_reconfig_dev_hndl();
   // Find the peer that is currently open
   tBTA_AV_CO_PEER* p_peer = nullptr;
+  APPL_TRACE_DEBUG("%s: hndl: %d", __func__, hndl);
   if (hndl > 0)
     p_peer = bta_av_co_get_peer(hndl);
   else {
@@ -1627,7 +1634,7 @@ bool bta_av_co_set_codec_user_config(
     goto done;
   }
 
-  if (restart_output) {
+  if (restart_output || hndl > 0) {
     uint8_t num_protect = 0;
 #if (BTA_AV_CO_CP_SCMS_T == TRUE)
     if (p_peer->cp_active) num_protect = AVDT_CP_INFO_LEN;
@@ -1654,6 +1661,8 @@ bool bta_av_co_set_codec_user_config(
       isDevUiReq = false;
     }
     btif_av_set_reconfig_flag(hndl);
+    uint8_t index = BTA_AV_CO_AUDIO_HNDL_TO_INDX(hndl);
+    btif_av_clear_remote_start_timer(index);
     APPL_TRACE_DEBUG("%s: call BTA_AvReconfig(x%x)", __func__, p_peer->handle);
     BTA_AvReconfig(p_peer->handle, true, p_sink->sep_info_idx,
                    p_peer->codec_config, num_protect, bta_av_co_cp_scmst);
@@ -1676,8 +1685,12 @@ done:
                          sizeof(RawAddress));
     APPL_TRACE_DEBUG("%s BDA: %s", __func__, p_peer->addr.ToString().c_str());
   }
-  if (!success || !restart_output) {
-    APPL_TRACE_DEBUG("%s:reseting codec reconfig flag",__func__);
+
+  if (btif_av_check_is_cached_reconfig_event_exist(bt_addr) &&
+      btif_av_check_is_reconfig_pending_flag_set(bt_addr)) {
+    APPL_TRACE_DEBUG("%s: reconfig event exist to process.",__func__);
+  } else if (!success || !restart_output) {
+    APPL_TRACE_DEBUG("%s: reseting codec reconfig flag",__func__);
     btif_av_reset_codec_reconfig_flag(bt_addr);
   }
   return success;
@@ -1963,7 +1976,7 @@ void bta_av_co_init(
   bool isMcastSupported = btif_av_is_multicast_supported();
   for (size_t i = 0; i < BTA_AV_CO_NUM_ELEMENTS(bta_av_co_cb.peers); i++) {
     p_peer = &bta_av_co_cb.peers[i];
-    if (p_peer != NULL)
+    if (p_peer != NULL && p_peer->codecs == NULL)
       p_peer->codecs = new A2dpCodecs(codec_priorities);
 
     if (p_peer->codecs != nullptr)

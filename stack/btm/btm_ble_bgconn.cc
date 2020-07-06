@@ -146,8 +146,11 @@ void btm_update_scanner_filter_policy(tBTM_BLE_SFP scan_policy) {
   std::vector<uint16_t> scan_window = {BTM_BLE_GAP_DISC_SCAN_WIN, BTM_BLE_GAP_DISC_SCAN_WIN};
   uint8_t i=0;
 
-  uint8_t scan_phy = SCAN_PHY_LE_1M;
-  if (controller_get_interface()->supports_ble_coded_phy()) scan_phy |= SCAN_PHY_LE_CODED;
+  uint8_t scan_phy = p_inq->scan_phy;
+  if (!scan_phy) {
+    scan_phy = SCAN_PHY_LE_1M;
+    if (controller_get_interface()->supports_ble_coded_phy()) scan_phy |= SCAN_PHY_LE_CODED;
+  }
 
   int phy_cnt = std::bitset<std::numeric_limits<uint8_t>::digits>(scan_phy).count();
   if(!p_inq->scan_interval.empty() && !p_inq->scan_window.empty()) {
@@ -235,21 +238,35 @@ bool btm_add_dev_to_controller(bool to_add, const RawAddress& bd_addr) {
   if (p_dev_rec != NULL && p_dev_rec->device_type & BT_DEVICE_TYPE_BLE) {
     if (to_add) {
       if (!p_dev_rec->ble.identity_addr.IsEmpty()) {
-        background_connection_add(p_dev_rec->ble.identity_addr_type,
+        if (p_dev_rec->ble.ble_addr_type == BLE_ADDR_RANDOM &&
+            BTM_BLE_IS_RANDOM_STATIC_BDA(bd_addr)) {
+          LOG(INFO) << __func__ << " adding random static address: "
+              << bd_addr << " into white list";
+          background_connection_add(p_dev_rec->ble.ble_addr_type, bd_addr);
+        } else {
+          background_connection_add(p_dev_rec->ble.identity_addr_type,
                                   p_dev_rec->ble.identity_addr);
+        }
       } else {
         background_connection_add(p_dev_rec->ble.ble_addr_type, bd_addr);
 
         if (p_dev_rec->ble.ble_addr_type == BLE_ADDR_RANDOM &&
             BTM_BLE_IS_RESOLVE_BDA(bd_addr)) {
-          LOG(INFO) << __func__ << " addig RPA into white list";
+          LOG(INFO) << __func__ << " adding RPA into white list";
         }
       }
 
       p_dev_rec->ble.in_controller_list |= BTM_WHITE_LIST_BIT;
     } else {
       if (!p_dev_rec->ble.identity_addr.IsEmpty()) {
-        background_connection_remove(p_dev_rec->ble.identity_addr);
+        if (p_dev_rec->ble.ble_addr_type == BLE_ADDR_RANDOM &&
+            BTM_BLE_IS_RANDOM_STATIC_BDA(bd_addr)) {
+          LOG(INFO) << __func__ << " Removing random static address: "
+              << bd_addr << " from white list";
+          background_connection_remove(bd_addr);
+        } else {
+          background_connection_remove(p_dev_rec->ble.identity_addr);
+        }
       } else {
         background_connection_remove(bd_addr);
 

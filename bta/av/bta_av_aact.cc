@@ -133,6 +133,7 @@ void bta_av_vendor_offload_check_stop_start(tBTA_AV_SCB* p_scb);
 void update_sub_band_info(uint8_t **param, int *param_len, uint8_t id, uint16_t data);
 void update_sub_band_info(uint8_t **param, int *param_len, uint8_t id, uint8_t *data, uint8_t size);
 void enc_mode_change_callback(tBTM_VSC_CMPL *param);
+tBTA_AV_HNDL offload_pending_handle = BTA_AV_HNDL_MSK;
 
 /* state machine states */
 enum {
@@ -493,14 +494,17 @@ static bool bta_av_next_getcap(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
       p_scb->sep_info_idx = i;
 
       /* we got a stream; get its capabilities */
-      if (p_scb->p_cap == NULL)
+      if (p_scb->p_cap == NULL) {
         p_scb->p_cap = (tAVDT_CFG*)osi_malloc(sizeof(tAVDT_CFG));
+      }
+
       if ((p_scb->avdt_version >= AVDT_VERSION_SYNC) &&
           (A2DP_GetAvdtpVersion() >= AVDT_VERSION_SYNC)) {
         p_req = AVDT_GetAllCapReq;
       } else {
         p_req = AVDT_GetCapReq;
       }
+
       if ((*p_req)(p_scb->peer_addr,
                      p_scb->sep_info[i].seid,
                      p_scb->p_cap, bta_av_dt_cback[p_scb->hdi]) == AVDT_SUCCESS) {
@@ -1273,8 +1277,9 @@ void bta_av_cleanup(tBTA_AV_SCB* p_scb, UNUSED_ATTR tBTA_AV_DATA* p_data) {
   tBTA_AV_CONN_CHG msg;
   uint8_t role = BTA_AV_ROLE_AD_INT;
 
-  APPL_TRACE_DEBUG("%s: for handle: 0x%x, peer_add: %s",
-           __func__, p_scb->hndl, p_scb->peer_addr.ToString().c_str());
+  APPL_TRACE_DEBUG("%s: handle: 0x%x, peer_add: %s, deregistring: %d, tws_device: %d",
+     __func__, p_scb->hndl, p_scb->peer_addr.ToString().c_str(), p_scb->deregistring,
+     p_scb->tws_device);
   last_sent_vsc_cmd = 0;
 
   /* free any buffers */
@@ -1797,6 +1802,13 @@ void bta_av_str_opened(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
     tBTA_AV bta_av_data;
     bta_av_data.open = open;
     (*bta_av_cb.p_cback)(BTA_AV_OPEN_EVT, &bta_av_data);
+
+    APPL_TRACE_DEBUG("%s: Free Audio list from previous stream", __func__);
+    while (!list_is_empty(p_scb->a2dp_list)) {
+      BT_HDR* p_buf = (BT_HDR*)list_front(p_scb->a2dp_list);
+      list_remove(p_scb->a2dp_list, p_buf);
+      osi_free(p_buf);
+    }
 #if (TWS_ENABLED == TRUE)
     APPL_TRACE_DEBUG("%s:audio count  = %d ",__func__, bta_av_cb.audio_open_cnt);
     if (p_scb->tws_device) {
@@ -2693,8 +2705,9 @@ void bta_av_reconfig(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
   tBTA_AV_RECONFIG evt;
   tBTA_AV_API_RCFG* p_rcfg = &p_data->api_reconfig;
 
-  APPL_TRACE_DEBUG("%s: r:%d, s:%d idx: %d (o:%d)", __func__, p_scb->recfg_sup,
-                   p_scb->suspend_sup, p_scb->rcfg_idx, p_scb->sep_info_idx);
+  APPL_TRACE_DEBUG("%s: r:%d, s:%d idx: %d (o:%d), p_scb->role: x%x,"
+         " p_scb->started: %d", __func__, p_scb->recfg_sup, p_scb->suspend_sup,
+         p_scb->rcfg_idx, p_scb->sep_info_idx, p_scb->role, p_scb->started);
 
   p_scb->num_recfg = 0;
   /* store the new configuration in control block */
@@ -2705,12 +2718,36 @@ void bta_av_reconfig(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
     evt.status = BTA_AV_FAIL_RESOURCES;
     evt.chnl   = p_scb->chnl;
     evt.hndl   = p_scb->hndl;
+    APPL_TRACE_DEBUG("%s: sending reconfig fail with status: %d", __func__,
+                                           evt.status);
     (*bta_av_cb.p_cback)(BTA_AV_RECONFIG_EVT, (tBTA_AV *)&evt);
 
     /* this event is not possible in this state.
      * use it to bring the SSM back to open state
      */
     bta_av_ssm_execute(p_scb, BTA_AV_SDP_DISC_OK_EVT, NULL);
+    return;
+  }
+
+  /* When Reconfig from App followed by MM start back to back, then fake reconfig
+   * fail instead sending reconfig to remote, to avoid BAD_STATE error due to btif
+   * AV SM has been moved to started handler. So, from below code host will retry
+   * reconfig in proper way as supend->reconfig->start.
+   */
+  if ((p_scb->role == BTA_AV_ROLE_START_INT) &&
+        (p_scb->started == false)) {
+    /* report failure */
+    evt.status = BTA_AV_FAIL_RECONFIG;
+    evt.chnl   = p_scb->chnl;
+    evt.hndl   = p_scb->hndl;
+    APPL_TRACE_DEBUG("%s: sending reconfig fail with status: %d", __func__,
+                                           evt.status);
+    (*bta_av_cb.p_cback)(BTA_AV_RECONFIG_EVT, (tBTA_AV *)&evt);
+
+    /* Use below event to bring the SSM back to open state if SSM is in reconfig state.
+     * When reconfig fail happens and if is otherthan reconfig SSM, move the SSM to
+     * same state*/
+    bta_av_ssm_execute(p_scb, BTA_AV_RECONFIG_FAIL_EVT, NULL);
     return;
   }
   btav_a2dp_codec_index_t curr_codec_index = A2DP_SourceCodecIndex(p_scb->cfg.codec_info);
@@ -3688,6 +3725,13 @@ void bta_av_rcfg_open(tBTA_AV_SCB* p_scb, UNUSED_ATTR tBTA_AV_DATA* p_data) {
      * adjust the sep_idx now */
     bta_av_adjust_seps_idx(p_scb, bta_av_get_scb_handle(p_scb, AVDT_TSEP_SRC));
 
+    APPL_TRACE_DEBUG("%s: Free Audio list from previous stream", __func__);
+    while (!list_is_empty(p_scb->a2dp_list)) {
+      BT_HDR* p_buf = (BT_HDR*)list_front(p_scb->a2dp_list);
+      list_remove(p_scb->a2dp_list, p_buf);
+      osi_free(p_buf);
+    }
+
     /* open the stream with the new config */
     p_scb->sep_info_idx = p_scb->rcfg_idx;
     AVDT_OpenReq(p_scb->avdt_handle, p_scb->peer_addr,
@@ -4016,7 +4060,21 @@ void offload_vendor_callback(tBTM_VSC_CMPL *param)
           break;
       case VS_QHCI_A2DP_OFFLOAD_START:
           APPL_TRACE_DEBUG("%s: single VSC success: %d",__func__, param->p_param_buf[1]);
-          (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, (tBTA_AV*)&status);
+          tBTA_AV bta_av_data;
+          tBTA_AV_OFFLOAD_RSP offload_rsp;
+          if (offload_pending_handle != BTA_AV_HNDL_MSK) {
+            offload_rsp.hndl = offload_pending_handle;
+            offload_pending_handle = BTA_AV_HNDL_MSK;
+            APPL_TRACE_DEBUG("%s:resetting offload_pending_handle",__func__);
+          } else {
+            offload_rsp.hndl = offload_start.p_scb->hndl;
+          }
+          offload_rsp.status = status;
+          offload_rsp.stream_start = offload_start.stream_start;
+          //bta_av_data.start.hndl = offload_start.p_scb->hndl;
+          bta_av_data.offload_rsp = offload_rsp;
+          offload_start.p_scb->vendor_start = true;
+          (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, &bta_av_data);
           break;
       default:
       break;
@@ -4030,8 +4088,25 @@ void offload_vendor_callback(tBTM_VSC_CMPL *param)
     last_sent_vsc_cmd = 0;
   } else {
     APPL_TRACE_DEBUG("Offload failed for subopcode= %d",param->p_param_buf[1]);
-    if (param->opcode != VS_QHCI_STOP_A2DP_MEDIA)
-      (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, (tBTA_AV*)&status);
+    if (param->opcode != VS_QHCI_STOP_A2DP_MEDIA) {
+      if (!btif_a2dp_src_vsc.multi_vsc_support) {
+        tBTA_AV bta_av_data;
+        tBTA_AV_OFFLOAD_RSP offload_rsp;
+        if (offload_pending_handle != BTA_AV_HNDL_MSK) {
+          offload_rsp.hndl = offload_pending_handle;
+          offload_pending_handle = BTA_AV_HNDL_MSK;
+          APPL_TRACE_DEBUG("%s:resetting offload_pending_handle",__func__);
+        } else {
+          offload_rsp.hndl = offload_start.p_scb->hndl;
+        }
+        offload_rsp.status = status;
+        offload_rsp.stream_start = offload_start.stream_start;
+        bta_av_data.offload_rsp = offload_rsp;
+        (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, &bta_av_data);
+      } else {
+        (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, (tBTA_AV*)&status);
+      }
+    }
   }
 }
 
@@ -4497,7 +4572,7 @@ void bta_av_offload_req(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
                                          tws_pair_addr) == true) {
               APPL_TRACE_DEBUG("%s:TWS pair found",__func__);
               if (tws_pair_addr == p_scb->peer_addr &&
-                !p_scbi->offload_supported && p_scbi->eb_state == TWSP_EB_STATE_IN_EAR) {
+                !p_scbi->offload_supported) {
                 APPL_TRACE_DEBUG("%s:VSC is not exchanged for second earbud",__func__);
                 offload_start.stream_start = false;
               }
@@ -4526,8 +4601,11 @@ void bta_av_offload_req(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
         }
       }
     }
-    else
+    else {
       p_scb->offload_started = false;
+      offload_pending_handle = p_scb->hndl;
+      APPL_TRACE_DEBUG("%s:setting offload_pending_handle = %d", __func__,offload_pending_handle);
+    }
     offload_start.ttp = 150;
     memset(offload_start.codec_info, 0 , AVDT_CODEC_SIZE);
     memcpy(offload_start.codec_info, p_scb->cfg.codec_info,

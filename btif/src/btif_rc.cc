@@ -71,6 +71,7 @@
 
 #include <hardware/bt_rc.h>
 #include <hardware/bt_vendor_rc.h>
+#include "btif/include/btif_config.h"
 #include "avrc_defs.h"
 #include "bt_common.h"
 #include "bta_api.h"
@@ -691,13 +692,19 @@ void handle_rc_features(btif_rc_device_cb_t* p_dev) {
 
   btrc_remote_features_t rc_features = BTRC_FEAT_NONE;
   RawAddress avdtp_addr = btif_av_get_addr(p_dev->rc_addr);
-  int ver = sdp_get_stored_avrc_tg_version(p_dev->rc_addr);
+  uint16_t ver = 0;
+  bool is_entry_present = btif_config_get_uint16(rc_addr.ToString().c_str(),
+                                                 AV_REM_CTRL_VERSION_CONFIG_KEY, (uint16_t*) &ver);
+  ver = sdp_get_stored_avrc_tg_version(p_dev->rc_addr);
   ver = (AVRCP_VERSION_BIT_MASK & ver);
+
   BTIF_TRACE_DEBUG("%s: AVDTP Address: %s AVCTP address: %s", __func__,
                    avdtp_addr.ToString().c_str(), rc_addr.ToString().c_str());
+  BTIF_TRACE_DEBUG("%s:version entry present: %d version: %d", __func__, is_entry_present, ver);
 
-  if (interop_match_addr_or_name(INTEROP_DISABLE_ABSOLUTE_VOLUME, &rc_addr) ||
-      absolute_volume_disabled() || (avdtp_addr != rc_addr) || (ver < AVRC_REV_1_4)) {
+  if (interop_match_addr_or_name(INTEROP_DISABLE_ABSOLUTE_VOLUME, &rc_addr)
+      || absolute_volume_disabled() || (avdtp_addr != rc_addr) ||
+      (is_entry_present && (ver < AVRC_REV_1_4))) {
     p_dev->rc_features &= ~BTA_AV_FEAT_ADV_CTRL;
   }
 
@@ -1982,13 +1989,15 @@ static uint8_t fill_attribute_id_array(
 static void btif_rc_upstreams_evt(uint16_t event, tAVRC_COMMAND* pavrc_cmd,
                                   uint8_t ctype, uint8_t label,
                                   btif_rc_device_cb_t* p_dev) {
-  BTIF_TRACE_IMP("%s: pdu: %s handle: 0x%x ctype: %x label: %x event ID: %x",
-                   __func__, dump_rc_pdu(pavrc_cmd->pdu), p_dev->rc_handle,
-                   ctype, label, pavrc_cmd->reg_notif.event_id);
   RawAddress rc_addr = p_dev->rc_addr;
+  int ver = sdp_get_stored_avrc_tg_version(p_dev->rc_addr);
+  ver = (AVRCP_VERSION_BIT_MASK & ver);
+  BTIF_TRACE_IMP("%s: pdu: %s handle: 0x%x ctype: %x label: %x event ID: %x ver: %x",
+                   __func__, dump_rc_pdu(pavrc_cmd->pdu), p_dev->rc_handle,
+                   ctype, label, pavrc_cmd->reg_notif.event_id, ver);
 
   if (interop_match_addr_or_name(INTEROP_DISABLE_PLAYER_APPLICATION_SETTING_CMDS,
-            &rc_addr))
+            &rc_addr) || (ver < AVRC_REV_1_4))
   {
       if (event == AVRC_PDU_LIST_PLAYER_APP_ATTR || event == AVRC_PDU_GET_PLAYER_APP_VALUE_TEXT ||
           event == AVRC_PDU_GET_CUR_PLAYER_APP_VALUE || event == AVRC_PDU_SET_PLAYER_APP_VALUE ||

@@ -821,6 +821,8 @@ static void btif_dm_cb_create_bond(const RawAddress& bd_addr,
   if (btm_cb.pairing_state != BTM_PAIR_STATE_IDLE ) {
     BTIF_TRACE_DEBUG("%s: btm_cb.pairing_state = %d, one pairing in progress ",
                       __func__, btm_cb.pairing_state);
+    auto tmp = bd_addr;
+    HAL_CBACK(bt_hal_cbacks, bond_state_changed_cb, BT_STATUS_FAIL, &tmp, BT_BOND_STATE_NONE);
     return;
   }
 
@@ -1670,6 +1672,16 @@ static void btif_dm_search_services_evt(uint16_t event, char* p_param) {
           BTIF_TRACE_WARNING(
             "%s: SDP reached to maximum attempts, sending bond fail to upper layers",
             __func__);
+          /* For HID pointing device upon authentication is successful, SDP
+           * is delayed by 500ms and bond state is updated to BONDED from bonding.
+           * When SDP failed deleting bonded device from the database and sending
+           * disconnect before moving bond state to BOND NONE.
+           */
+          if (check_cod(&bd_addr, COD_HID_POINTING)) {
+            BTIF_TRACE_WARNING("%s: deleting bonded device from database", __func__);
+            btif_storage_remove_bonded_device(&bd_addr);
+            BTA_DmRemoveDevice(bd_addr);
+          }
           pairing_cb.sdp_attempts = 0;
           bond_state_changed(BT_STATUS_FAIL, pairing_cb.bd_addr, BT_BOND_STATE_NONE);
           return;
@@ -2082,6 +2094,24 @@ static void btif_dm_upstreams_evt(uint16_t event, char* p_param) {
       btm_set_bond_type_dev(p_data->link_down.bd_addr, BOND_TYPE_UNKNOWN);
 
       BTIF_TRACE_DEBUG("BTA_DM_LINK_DOWN_EVT. Sending BT_ACL_STATE_DISCONNECTED");
+
+      /* For HID pointing device upon authentication is successful, SDP
+       * is delayed by 500ms and bond state is updated to BONDED from bonding.
+       * If remote sent disconnect before SDP is successful, deleting bonded
+       * device from the database and moving bond state to BOND NONE.
+       */
+      if (pairing_cb.bd_addr == bd_addr && pairing_cb.sdp_attempts !=0 &&
+          (check_cod(&bd_addr, COD_HID_POINTING))) {
+            BTIF_TRACE_WARNING("%s: deleting bonded device from database", __func__);
+            if (!bl_device.sdp_delay_timer &&
+                alarm_is_scheduled(bl_device.sdp_delay_timer))
+              alarm_cancel(bl_device.sdp_delay_timer);
+
+            btif_storage_remove_bonded_device(&bd_addr);
+            BTA_DmRemoveDevice(bd_addr);
+            bond_state_changed(BT_STATUS_FAIL, pairing_cb.bd_addr, BT_BOND_STATE_NONE);
+      }
+
       if (num_active_le_links > 0 &&
           p_data->link_down.link_type == BT_TRANSPORT_LE) {
         num_active_le_links--;

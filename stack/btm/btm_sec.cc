@@ -1200,6 +1200,10 @@ tBTM_STATUS BTM_SecBondCancel(const RawAddress& bd_addr) {
       BTM_TRACE_DEBUG("Cancel LE pairing");
       if (SMP_PairCancel(bd_addr)) {
         return BTM_CMD_STARTED;
+      } else {
+        BTM_TRACE_DEBUG("LE pairing not in progress, reset pairing state");
+        p_dev_rec->security_required = BTM_SEC_NONE;
+        btm_sec_change_pairing_state(BTM_PAIR_STATE_IDLE);
       }
     }
     return BTM_WRONG_MODE;
@@ -1282,7 +1286,7 @@ tBTM_STATUS BTM_SecResetPairingFlag(const RawAddress& bd_addr) {
         (*p_callback)(&bd_addr, BT_TRANSPORT_BR_EDR, p_dev_rec->p_ref_data, (uint8_t)rc);
       }
     }
-    l2cu_resubmit_pending_sec_req(&p_dev_rec->bd_addr);
+    btm_sec_check_pending_reqs();
   }
 
   return (BTM_SUCCESS);
@@ -2393,6 +2397,7 @@ tBTM_STATUS btm_sec_l2cap_access_req(const RawAddress& bd_addr, uint16_t psm,
           __func__);
       p_dev_rec->p_callback = p_callback;
       p_dev_rec->sec_state = BTM_SEC_STATE_DELAY_FOR_ENC;
+      btm_cb.sec_req_pending = true;
       (*p_callback)(&bd_addr, transport, p_ref_data, rc);
 
       return BTM_CMD_STARTED;
@@ -4104,6 +4109,14 @@ void btm_sec_auth_complete(uint16_t handle, uint8_t status) {
                                              p_dev_rec->sec_bd_name, status);
   }
 
+  /*as p_auth_complete_callback may remove p_dev_rec from list, so we
+   * need find it again */
+  p_dev_rec = btm_find_dev_by_handle (handle);
+  if (p_dev_rec == NULL) {
+    BTM_TRACE_ERROR("%s p_dev_rec have been removed, return", __func__);
+    return;
+  }
+
   p_dev_rec->sec_state = BTM_SEC_STATE_IDLE;
 
   /* If this is a bonding procedure can disconnect the link now */
@@ -4321,7 +4334,7 @@ void btm_sec_encrypt_change(uint16_t handle, uint8_t status,
       BTM_TRACE_DEBUG("%s: clearing callback. p_dev_rec=%p, p_callback=%p",
                       __func__, p_dev_rec, p_dev_rec->p_callback);
       p_dev_rec->p_callback = NULL;
-      l2cu_resubmit_pending_sec_req(&p_dev_rec->bd_addr);
+      btm_sec_check_pending_reqs();
     }
     return;
   }
@@ -4568,6 +4581,14 @@ void btm_sec_connected(const RawAddress& bda, uint16_t handle, uint8_t status,
                                                p_dev_rec->dev_class,
                                                p_dev_rec->sec_bd_name, status);
       }
+    }
+
+    /*as p_auth_complete_callback may remove p_dev_rec from list, so we
+     * need find it again */
+    p_dev_rec = btm_find_dev(bda);
+    if (p_dev_rec == NULL) {
+      BTM_TRACE_ERROR("%s p_dev_rec have been removed, return", __func__);
+      return;
     }
 
     if (status == HCI_ERR_CONNECTION_TOUT ||
@@ -5028,6 +5049,7 @@ static void btm_sec_pairing_timeout(UNUSED_ATTR void* data) {
                                : BTM_AUTH_AP_YES;
   BD_NAME name;
 
+  RawAddress p_bda = p_cb->pairing_bda;
   p_dev_rec = btm_find_dev(p_cb->pairing_bda);
   tL2C_LCB *p_lcb = l2cu_find_lcb_by_bd_addr (p_cb->pairing_bda, BT_TRANSPORT_BR_EDR);
 
@@ -5050,7 +5072,7 @@ static void btm_sec_pairing_timeout(UNUSED_ATTR void* data) {
       if (btm_cb.api.p_auth_complete_callback) {
         if (p_dev_rec == NULL) {
           name[0] = 0;
-          (*btm_cb.api.p_auth_complete_callback)(p_cb->pairing_bda, NULL, name,
+          (*btm_cb.api.p_auth_complete_callback)(p_bda, NULL, name,
                                                  HCI_ERR_CONNECTION_TOUT);
         } else
           (*btm_cb.api.p_auth_complete_callback)(
@@ -5119,7 +5141,7 @@ static void btm_sec_pairing_timeout(UNUSED_ATTR void* data) {
       if (btm_cb.api.p_auth_complete_callback) {
         if (p_dev_rec == NULL) {
           name[0] = 0;
-          (*btm_cb.api.p_auth_complete_callback)(p_cb->pairing_bda, NULL, name,
+          (*btm_cb.api.p_auth_complete_callback)(p_bda, NULL, name,
                                                  HCI_ERR_CONNECTION_TOUT);
         } else
           (*btm_cb.api.p_auth_complete_callback)(
@@ -5134,7 +5156,7 @@ static void btm_sec_pairing_timeout(UNUSED_ATTR void* data) {
       btm_sec_change_pairing_state(BTM_PAIR_STATE_IDLE);
       break;
   }
-  BTM_SecResetPairingFlag(p_cb->pairing_bda);
+  BTM_SecResetPairingFlag(p_bda);
 }
 
 /*******************************************************************************
@@ -5465,6 +5487,7 @@ extern tBTM_STATUS btm_sec_execute_procedure(tBTM_SEC_DEV_REC* p_dev_rec) {
           (p_dev_rec->security_required & BTM_SEC_IN_ENCRYPT)) ||
          (!p_dev_rec->is_originator &&
           (p_dev_rec->security_required & BTM_SEC_IN_AUTHENTICATE))) {
+       btm_cb.sec_req_pending = true;
        return (BTM_CMD_STARTED);
      }
   }
@@ -5871,8 +5894,11 @@ static void btm_sec_change_pairing_state(tBTM_PAIRING_STATE new_state) {
         p_dev_rec->sec_flags |= BTM_SEC_PAIRING_IN_PROGRESS;
       }
     }
-    alarm_set_on_mloop(btm_cb.pairing_timer, BTM_SEC_TIMEOUT_VALUE * 1000,
-                       btm_sec_pairing_timeout, NULL);
+    /* Avoid reset timer for same state */
+    if (new_state != old_state) {
+      alarm_set_on_mloop(btm_cb.pairing_timer, BTM_SEC_TIMEOUT_VALUE * 1000,
+                         btm_sec_pairing_timeout, NULL);
+    }
   }
 }
 
