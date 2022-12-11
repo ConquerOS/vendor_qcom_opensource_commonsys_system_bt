@@ -68,8 +68,10 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE
 #include "audio_hal_interface/aidl/le_audio_software.h"
 #include <hardware/audio.h>
 #include <vector>
+#ifdef ADV_AUDIO_FEATURE
 #include <hardware/bt_pacs_client.h>
 #include <btif_vmcp.h>
+#endif
 #include <aidl/vendor/qti/hardware/bluetooth/audio/LeAudioVendorConfiguration.h>
 #include <aidl/vendor/qti/hardware/bluetooth/audio/VendorCodecType.h>
 
@@ -94,7 +96,9 @@ using VendorConfiguration =
     ::aidl::android::hardware::bluetooth::audio::LeAudioCodecConfiguration::VendorConfiguration;
 using ::aidl::android::hardware::bluetooth::audio::UnicastCapability;
 using vendor::qti::hardware::bluetooth_audio::V2_1::LC3ChannelMode;
+#ifdef ADV_AUDIO_FEATURE
 using bluetooth::bap::pacs::CodecIndex;
+#endif
 //using ::bluetooth::audio::BitsPerSample;
 LeAudioClientInterface* leAudioClientInterface = nullptr;
 LeAudioClientInterface::Sink* unicastSinkClientInterface = nullptr;
@@ -518,6 +522,8 @@ LeAudioConfiguration fetch_offload_audio_config(int profile, int direction) {
 
   uint16_t type = pclient_cbs[profile - 1]->get_profile_status_cb();
   uint16_t frame_duration = pclient_cbs[profile - 1]->get_frame_length_cb(direction);
+
+#ifdef ADV_AUDIO_FEATURE
   bool is_lc3q_supported = false;
   CodecIndex codec_type = (CodecIndex) pclient_cbs[profile - 1]->get_codec_type(direction);
   if (codec_type == CodecIndex::CODEC_INDEX_SOURCE_APTX_ADAPTIVE_LE ||
@@ -527,7 +533,6 @@ LeAudioConfiguration fetch_offload_audio_config(int profile, int direction) {
                << frame_duration << ", from leaudio_configs.xml";
   }
   uint8_t encoder_version = 0;
-  if(1) {
 /*if (codec_type == CodecIndex::CODEC_INDEX_SOURCE_APTX_ADAPTIVE_LE ||
       pclient_cbs[profile - 1]->get_is_codec_type_lc3q(direction)) {*/
     VendorConfiguration vendor_config;
@@ -636,7 +641,7 @@ LeAudioConfiguration fetch_offload_audio_config(int profile, int direction) {
       }
     }
     return ucast_config;
-  } else {
+#else /* ADV_AUDIO_FEATURE */
     // TODO to fill the right PD
     Lc3Configuration lc3_config = {
                   .pcmBitDepth = 24,
@@ -662,7 +667,7 @@ LeAudioConfiguration fetch_offload_audio_config(int profile, int direction) {
       });
     }
     return ucast_config;
-  }
+#endif /* ADV_AUDIO_FEATURE */
 }
 
 bool leAudio_get_selected_hal_codec_config(AudioConfigurationAIDL *lea_config,
@@ -699,6 +704,7 @@ bool btif_ahim_setup_codec(uint8_t profile) {
       uint16_t profile_type = btif_ahim_get_lea_active_profile(profile);
       BTIF_TRACE_IMP("%s: AIDL, profile_type: %d", __func__, profile_type);
       if(profile_type == BAP || profile_type == GCP) {  // ToAIr only
+#ifdef ADV_AUDIO_FEATURE
         CodecIndex codec_type = (CodecIndex) pclient_cbs[profile - 1]->get_codec_type(TX_ONLY_CONFIG);
         if (codec_type == CodecIndex::CODEC_INDEX_SOURCE_APTX_ADAPTIVE_R4) {
           if (!leAudio_get_selected_hal_codec_config(&lea_tx_config, profile,
@@ -717,6 +723,7 @@ bool btif_ahim_setup_codec(uint8_t profile) {
           if(unicastSourceClientInterface)
             unicastSourceClientInterface->UpdateAudioConfigToHal(lea_rx_config);
         } else {
+#endif
             if (!leAudio_get_selected_hal_codec_config(&lea_tx_config, profile,
                                                       TX_ONLY_CONFIG)) {
             LOG(ERROR) << __func__ << ": Failed to get CodecConfiguration";
@@ -728,7 +735,9 @@ bool btif_ahim_setup_codec(uint8_t profile) {
             // TODO to fill both session/single session configs based on profile
             if(unicastSinkClientInterface)
               unicastSinkClientInterface->UpdateAudioConfigToHal(lea_tx_config);
+#ifdef ADV_AUDIO_FEATURE
         }
+#endif
       } else if(profile_type == BAP_CALL ||
                 profile_type == GCP_RX ||
                 profile_type == WMCP_TX) { // Toair and FromAir
@@ -786,6 +795,7 @@ void btif_ahim_start_session(uint8_t profile) {
                btif_ahim_get_lea_active_profile(profile);
       BTIF_TRACE_IMP("%s: AIDL, profile_type: %d", __func__, profile_type);
       if(profile_type == BAP || profile_type == GCP) {  // ToAIr only
+#ifdef ADV_AUDIO_FEATURE
         CodecIndex codec_type = (CodecIndex) pclient_cbs[profile - 1]->get_codec_type(TX_ONLY_CONFIG);
         if (codec_type == CodecIndex::CODEC_INDEX_SOURCE_APTX_ADAPTIVE_R4) {
           if(unicastSinkClientInterface)
@@ -793,9 +803,12 @@ void btif_ahim_start_session(uint8_t profile) {
           if(unicastSourceClientInterface)
             unicastSourceClientInterface->StartSession();
         } else {
+#endif
           if(unicastSinkClientInterface)
             unicastSinkClientInterface->StartSession();
+#ifdef ADV_AUDIO_FEATURE
         }
+#endif
       } else if(profile_type == BAP_CALL ||
                 profile_type == GCP_RX ||
                 profile_type == WMCP_TX) { // Toair and FromAir
