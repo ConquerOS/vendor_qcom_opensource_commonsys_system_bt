@@ -1194,6 +1194,7 @@ size_t btif_ahim_read(uint8_t* p_buf, uint32_t len) {
   return bluetooth::audio::aidl::a2dp::read(p_buf, len);
 }
 
+#ifdef ADV_AUDIO_FEATURE
 void btif_ahim_update_audio_config() {
   AudioConfigurationAIDL lea_tx_config, lea_rx_config;
   CodecIndex codec_type =
@@ -1215,6 +1216,7 @@ if(unicastSinkClientInterface)
 else
   return 0xFFFF;
 }
+#endif
 
 void btif_ahim_set_remote_delay(uint16_t delay_report, uint8_t profile) {
   BTIF_TRACE_IMP("%s: AIDL, profile: %d, delay_report: %d",
