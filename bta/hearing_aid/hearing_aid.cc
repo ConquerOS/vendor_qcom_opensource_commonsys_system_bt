@@ -1503,8 +1503,6 @@ class HearingAidImpl : public HearingAid {
 
     DoDisconnectCleanUp(hearingDevice);
 
-    hearingDevices.Remove(address);
-
     if (connected)
       callbacks->OnConnectionState(ConnectionState::DISCONNECTED, address);
   }
@@ -1534,6 +1532,7 @@ class HearingAidImpl : public HearingAid {
                    false);
 
     callbacks->OnConnectionState(ConnectionState::DISCONNECTED, remote_bda);
+    hearingDevices.Remove(remote_bda);
   }
 
   void DoDisconnectCleanUp(HearingDevice* hearingDevice) {

@@ -224,7 +224,7 @@ void send_soc_log_command(bool value) {
   }
 }
 
-static bool is_soc_logging_enabled() {
+bool is_soc_logging_enabled() {
   char btsnoop_enabled[PROPERTY_VALUE_MAX] = "false";
   char btsoclog_enabled[PROPERTY_VALUE_MAX] = {0};
   char donglemode_prop[PROPERTY_VALUE_MAX] = "false";

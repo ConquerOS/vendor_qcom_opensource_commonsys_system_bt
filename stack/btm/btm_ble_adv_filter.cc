@@ -727,10 +727,14 @@ void BTM_LE_PF_set(tBTM_BLE_PF_FILT_INDEX filt_index,
         /* cmd.addr_type value always coming as 2 (default value).
          * Due to that addr_type is not taking consider if the remote device
          * address is Static RANDOM addr_type (1). So here we are reading
-         * proper addr_type from ReadDevInfo. If the device addr_type is not
+         * proper addr_type from ReadDevScanInfo. If the device addr_type is not
          * in the inquiry database or in the bonded list then default addr_type
          * 0x02 will be set.*/
-        BTM_ReadDevScanInfo(target_addr.bda, &dev_type, &target_addr.type);
+        if (target_addr.type == BLE_ADDR_RANDOM && BTM_BLE_IS_RANDOM_STATIC_BDA(target_addr.bda)) {
+          LOG_WARN(LOG_TAG, "Adding filter for static random address ");
+        } else {
+          BTM_ReadDevScanInfo(target_addr.bda, &dev_type, &target_addr.type);
+        }
         BTM_LE_PF_addr_filter(action, filt_index, target_addr,
                               base::DoNothing());
         if (!is_empty_128bit(cmd.irk)) {

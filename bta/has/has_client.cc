@@ -142,8 +142,10 @@ class HasClientImpl : public HasClient {
                               "profile - no gatt clients left!";
                 return;
               }
-              instance->gatt_if_ = client_id;
-              initCb.Run();
+              if (instance) {
+                instance->gatt_if_ = client_id;
+              }
+                initCb.Run();
             },
             initCb),
         true);

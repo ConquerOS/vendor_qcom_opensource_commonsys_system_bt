@@ -187,6 +187,8 @@ static void bta_dm_le_gattc_callback(tBTA_GATTC_EVT event, tBTA_GATTC* p_data);
 
 
 extern tBTA_DM_CONTRL_STATE bta_dm_pm_obtain_controller_state(void);
+extern bool is_soc_logging_enabled();
+extern void send_soc_log_command(bool value);
 
 #if (BLE_VND_INCLUDED == TRUE)
 static void bta_dm_ctrl_features_rd_cmpl_cback(tBTM_STATUS result);
@@ -689,13 +691,9 @@ void bta_dm_disable(UNUSED_ATTR tBTA_DM_MSG* p_data) {
     btm_enable_soc_iot_info_report(false);
   }
 
-  /* Disable SOC Logging */
-  if (soc_type == BT_SOC_TYPE_SMD) {
-    uint8_t param[5] = {0x10,0x02,0x00,0x00,0x01};
-    BTM_VendorSpecificCommand(HCI_VS_HOST_LOG_OPCODE,5,param,NULL);
-  } else if (soc_type >= BT_SOC_TYPE_CHEROKEE) {
-    uint8_t param[2] = {0x14, 0x00};
-    BTM_VendorSpecificCommand(HCI_VS_HOST_LOG_OPCODE, 2, param, NULL);
+  if (is_soc_logging_enabled()) {
+    LOG_DEBUG(LOG_TAG, "%s: Disable SOC logging", __func__);
+    send_soc_log_command(false);
   }
 
   /* Disable BQR events */
